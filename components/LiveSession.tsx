@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { LiveServerMessage, Modality } from "@google/genai";
 import { Mic, PhoneOff, Loader2, Volume2 } from 'lucide-react';
 import { createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
+import { ai } from '../services/geminiService';
 
 interface LiveSessionProps {
   onSessionEnd: (transcript: string) => void;
@@ -21,6 +22,9 @@ const LiveSession: React.FC<LiveSessionProps> = ({ onSessionEnd, onCancel }) => 
   const nextStartTimeRef = useRef<number>(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   
+  // VAD Smoothing
+  const volSmoothRef = useRef<number>(0);
+  
   // Transcription history tracking
   const transcriptRef = useRef<{role: string, text: string}[]>([]);
   const currentInputTransRef = useRef<string>('');
@@ -32,9 +36,10 @@ const LiveSession: React.FC<LiveSessionProps> = ({ onSessionEnd, onCancel }) => 
 
     const startSession = async () => {
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        // Reuse global 'ai' client from service to avoid re-instantiation overhead
         
         // Setup Audio Contexts
+        // Use 16000Hz for input as expected by Gemini Live
         inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
         outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         
@@ -55,10 +60,15 @@ const LiveSession: React.FC<LiveSessionProps> = ({ onSessionEnd, onCancel }) => 
               Speak slowly, softly, and concisely. Use a soothing tone.
               Ask one simple, open-ended question at a time.
               Do not diagnose. Just listen and help them explore their inner state.
-              Start by gently asking how they are feeling right now.
+              
+              CRITICAL INSTRUCTION:
+              Keep the session brief. You have a MAXIMUM of 7 conversational turns.
+              Keep track of the conversation flow.
+              On the 7th turn (or sooner if the user's emotion is clear), providing a comforting closing statement, summarizing what you've heard, and say goodbye.
             `,
-            inputAudioTranscription: { model: "gemini-flash-latest" }, 
-            outputAudioTranscription: { model: "gemini-flash-latest" },
+            // Fix: Pass empty objects to enable transcription, do not pass model names here.
+            inputAudioTranscription: {}, 
+            outputAudioTranscription: {},
           },
           callbacks: {
             onopen: () => {
@@ -66,19 +76,27 @@ const LiveSession: React.FC<LiveSessionProps> = ({ onSessionEnd, onCancel }) => 
               console.log('Session connected');
               setStatus('connected');
               
-              // Start streaming audio from mic
+              // Stream audio from the microphone
               if (inputAudioContextRef.current && streamRef.current) {
                 const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
-                const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+                // Lower buffer size to 1024 for higher responsiveness (approx 64ms at 16kHz)
+                const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(1024, 1, 1);
                 scriptProcessorRef.current = scriptProcessor;
                 
                 scriptProcessor.onaudioprocess = (e) => {
                   if (!isActive) return;
                   const inputData = e.inputBuffer.getChannelData(0);
                   
-                  // Simple VAD visualizer
-                  const rms = Math.sqrt(inputData.reduce((acc, val) => acc + val * val, 0) / inputData.length);
-                  setIsUserSpeaking(rms > 0.02);
+                  // Improved VAD with faster smoothing response
+                  const sum = inputData.reduce((acc, val) => acc + val * val, 0);
+                  const rms = Math.sqrt(sum / inputData.length);
+                  
+                  // Adjusted smoothing for better reactivity (60% history, 40% new)
+                  volSmoothRef.current = volSmoothRef.current * 0.6 + rms * 0.4;
+                  
+                  // Threshold for speech visualizer
+                  const isSpeakingNow = volSmoothRef.current > 0.01;
+                  setIsUserSpeaking(isSpeakingNow);
 
                   const pcmBlob = createPcmBlob(inputData);
                   sessionPromise?.then((session) => {

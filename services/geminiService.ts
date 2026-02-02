@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { EmotionResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Prompt system instruction to ensure precise, granular emotion words.
 const SYSTEM_INSTRUCTION = `

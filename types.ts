@@ -5,11 +5,13 @@ export interface EmotionResult {
   colorHex: string;
 }
 
+export type InputMode = 'text' | 'voice' | 'interview' | 'live';
+
 export interface CheckIn {
   id: string;
   timestamp: number;
   inputSummary: string; // The text or transcript summary
-  inputType: 'text' | 'voice';
+  inputType: InputMode;
   result: EmotionResult;
   imageUrl?: string;
 }

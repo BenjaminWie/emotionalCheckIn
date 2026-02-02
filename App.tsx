@@ -15,11 +15,13 @@ import BubbleBackground from './components/BubbleBackground';
 import VoiceRecorder from './components/VoiceRecorder';
 import LiveSession from './components/LiveSession';
 import { analyzeText, analyzeAudio, generateEmotionImage, createInterviewChat, analyzeInterview } from './services/geminiService';
-import { CheckIn, AppState, EmotionResult } from './types';
+import { CheckIn, AppState, EmotionResult, InputMode } from './types';
 import { Chat, GenerateContentResponse } from "@google/genai";
 
 // Helper to generate a unique ID
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+const MAX_CHAT_TURNS = 7;
 
 interface ChatMessage {
     role: 'user' | 'model';
@@ -30,7 +32,7 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.HOME);
   const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
   const [currentInput, setCurrentInput] = useState('');
-  const [inputMode, setInputMode] = useState<'text' | 'voice' | 'interview' | 'live'>('text');
+  const [inputMode, setInputMode] = useState<InputMode>('text');
   const [isProcessing, setIsProcessing] = useState(false);
   
   // State for result display
@@ -115,19 +117,35 @@ const App: React.FC = () => {
       setChatInstance(chat);
       setChatMessages([]);
       setInputMode('interview');
-      // Trigger first message from AI
+      // Trigger first message from AI proactively
       sendInterviewMessage(chat, "Hello."); 
+  };
+  
+  const startLiveSession = () => {
+      setInputMode('live');
+      // LiveSession component will handle immediate connection upon mounting
   };
 
   const sendInterviewMessage = async (chat: Chat, message: string, isUser: boolean = false) => {
+      let finalMessage = message;
+
       if (isUser) {
-          setChatMessages(prev => [...prev, { role: 'user', text: message }]);
+          // Check turn count (user messages / 2 approx, or just count user messages)
+          const userMsgCount = chatMessages.filter(m => m.role === 'user').length;
+          
+          if (userMsgCount >= MAX_CHAT_TURNS - 1) {
+              finalMessage += " [SYSTEM: This is the final turn. Please provide a brief comforting conclusion, summarize the emotion you sensed, and end the conversation.]";
+          }
+          
+          setChatMessages(prev => [...prev, { role: 'user', text: message }]); // Show original message to user
           setCurrentInput('');
       }
 
       setIsProcessing(true);
       try {
-          const result: GenerateContentResponse = await chat.sendMessage({ message: isUser ? message : "Start the conversation by asking me how I am feeling." });
+          // If first system start message, use as is.
+          const msgToSend = isUser ? finalMessage : "Start the conversation by asking me how I am feeling.";
+          const result: GenerateContentResponse = await chat.sendMessage({ message: msgToSend });
           const responseText = result.text || "";
           setChatMessages(prev => [...prev, { role: 'model', text: responseText }]);
       } catch (e) {
@@ -172,7 +190,7 @@ const App: React.FC = () => {
       id: generateId(),
       timestamp: Date.now(),
       inputSummary: currentInputSummary,
-      inputType: (inputMode === 'interview' || inputMode === 'live') ? 'text' : inputMode,
+      inputType: inputMode,
       result: currentResult,
       imageUrl: currentImage,
     };
@@ -265,6 +283,9 @@ const App: React.FC = () => {
       );
     }
 
+    const userMsgCount = chatMessages.filter(m => m.role === 'user').length;
+    const isChatFinished = userMsgCount >= MAX_CHAT_TURNS;
+
     return (
       <div className="flex flex-col h-full max-w-md mx-auto p-6 fade-in">
         <div className="flex justify-between items-center mb-6">
@@ -312,7 +333,7 @@ const App: React.FC = () => {
             </div>
           </button>
           <button
-            onClick={() => startInterview()}
+            onClick={startInterview}
             className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap ${
               inputMode === 'interview' ? 'bg-slate-700 shadow-sm text-white' : 'text-slate-500 hover:text-slate-300'
             }`}
@@ -322,10 +343,8 @@ const App: React.FC = () => {
             </div>
           </button>
           <button
-            onClick={() => setInputMode('live')}
-            className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap ${
-              inputMode === 'live' ? 'bg-slate-700 shadow-sm text-white' : 'text-slate-500 hover:text-slate-300'
-            }`}
+            onClick={startLiveSession}
+            className="px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap text-slate-500 hover:text-slate-300"
           >
             <div className="flex items-center gap-2">
               <Zap className="w-3 h-3" /> Live
@@ -396,26 +415,34 @@ const App: React.FC = () => {
                   
                   {/* Chat Input */}
                   <div className="relative">
-                      <input
-                          type="text"
-                          value={currentInput}
-                          onChange={(e) => setCurrentInput(e.target.value)}
-                          onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !isProcessing && currentInput.trim() && chatInstance) {
-                                  sendInterviewMessage(chatInstance, currentInput, true);
-                              }
-                          }}
-                          placeholder="Type your answer..."
-                          disabled={isProcessing}
-                          className="w-full bg-slate-800/60 backdrop-blur border border-slate-700 rounded-full py-4 pl-6 pr-12 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500/50"
-                      />
-                      <button 
-                          onClick={() => chatInstance && currentInput.trim() && sendInterviewMessage(chatInstance, currentInput, true)}
-                          disabled={!currentInput.trim() || isProcessing}
-                          className="absolute right-2 top-2 p-2 bg-indigo-600 rounded-full text-white disabled:bg-transparent disabled:text-slate-600 transition-colors"
-                      >
-                          <Send className="w-4 h-4" />
-                      </button>
+                      {isChatFinished ? (
+                         <div className="w-full text-center py-4 bg-slate-800/60 rounded-full text-slate-400 text-sm border border-slate-700">
+                            Session wrapped up. Please tap Analyze.
+                         </div>
+                      ) : (
+                        <>
+                            <input
+                                type="text"
+                                value={currentInput}
+                                onChange={(e) => setCurrentInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !isProcessing && currentInput.trim() && chatInstance) {
+                                        sendInterviewMessage(chatInstance, currentInput, true);
+                                    }
+                                }}
+                                placeholder={isProcessing ? "Waiting for response..." : "Type your answer..."}
+                                disabled={isProcessing}
+                                className="w-full bg-slate-800/60 backdrop-blur border border-slate-700 rounded-full py-4 pl-6 pr-12 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500/50"
+                            />
+                            <button 
+                                onClick={() => chatInstance && currentInput.trim() && sendInterviewMessage(chatInstance, currentInput, true)}
+                                disabled={!currentInput.trim() || isProcessing}
+                                className="absolute right-2 top-2 p-2 bg-indigo-600 rounded-full text-white disabled:bg-transparent disabled:text-slate-600 transition-colors"
+                            >
+                                <Send className="w-4 h-4" />
+                            </button>
+                        </>
+                      )}
                   </div>
               </div>
           )}
@@ -543,8 +570,9 @@ const App: React.FC = () => {
                      {selectedCheckIn.inputType === 'voice' && <Mic className="w-3 h-3"/>}
                      {selectedCheckIn.inputType === 'text' && <Type className="w-3 h-3"/>}
                      {selectedCheckIn.inputType === 'interview' && <MessageCircle className="w-3 h-3"/>}
+                     {selectedCheckIn.inputType === 'live' && <Zap className="w-3 h-3"/>}
                      {/* Legacy support or generic fallback */}
-                     {!['voice', 'text', 'interview'].includes(selectedCheckIn.inputType) && <Zap className="w-3 h-3"/>}
+                     {!['voice', 'text', 'interview', 'live'].includes(selectedCheckIn.inputType) && <Zap className="w-3 h-3"/>}
                      Original Note
                 </div>
                 <p className="text-slate-400 italic text-sm leading-relaxed">
