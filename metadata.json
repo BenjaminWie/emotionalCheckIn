@@ -1,0 +1,7 @@
+{
+  "name": "MoodBubble",
+  "description": "An AI-powered emotion tracker that helps you find precise words for your feelings and visualizes them in a calm, bubbly interface.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
